@@ -1,0 +1,10 @@
+{
+  "name": "requests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/requests.test.mjs",
+    "check": "node --check src/requests.mjs"
+  }
+}
