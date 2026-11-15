@@ -18,6 +18,22 @@ class AuthError extends Error {
   }
 }
 
+class ForbiddenError extends Error {
+  constructor(message = 'forbidden') {
+    super(message);
+    this.name = 'ForbiddenError';
+    this.code = 'forbidden';
+  }
+}
+
+class NotFoundError extends Error {
+  constructor(message = 'not found') {
+    super(message);
+    this.name = 'NotFoundError';
+    this.code = 'not_found';
+  }
+}
+
 // In-memory store (para demo/tests)
 const REQUESTS = [];
 
@@ -60,7 +76,8 @@ function createRequest(token, payload) {
     state: 'Aberto',
     created_at: now,
     updated_at: now,
-    resolved_at: null
+    resolved_at: null,
+    responses: []
   };
   REQUESTS.push(rec);
   return { id: rec.id, state: rec.state, created_at: rec.created_at };
@@ -75,4 +92,85 @@ function clearStore() {
   REQUESTS.length = 0;
 }
 
-export { createRequest, getRequests, clearStore, ValidationError, AuthError };
+// New: list requests according to token and optional filters
+// opts: { owner: 'me'|'<userId>', state: '<state>', page, limit }
+function listRequests(token, opts = {}) {
+  if (!token || !token.sub) {
+    throw new AuthError();
+  }
+  const owner = opts.owner ?? 'me';
+  const state = opts.state;
+
+  // Helper to create summary view
+  const toSummary = (r) => ({ id: r.id, subject: r.subject, state: r.state, created_at: r.created_at });
+
+  // If filtering by state and not by owner, require support_agent role
+  if (typeof state === 'string') {
+    const roles = Array.isArray(token.roles) ? token.roles : [];
+    const isAgent = roles.includes('support_agent');
+    if (!isAgent) {
+      // For clients, only allow state filtering if it pertains to their own tickets (not global)
+      // For simplicity, deny global state queries to non-agents
+      throw new ForbiddenError('role support_agent required to list by state');
+    }
+    // support_agent may list by state across all tickets
+    return REQUESTS.filter(r => r.state === state).map(toSummary);
+  }
+
+  // Owner-based listing (defaults to the authenticated user)
+  if (owner === 'me') {
+    return REQUESTS.filter(r => r.owner_user_id === token.sub).map(toSummary);
+  }
+
+  // If owner is specific user id, only allow if token is support_agent
+  if (owner && owner !== 'me') {
+    const roles = Array.isArray(token.roles) ? token.roles : [];
+    const isAgent = roles.includes('support_agent');
+    if (!isAgent) {
+      throw new ForbiddenError('cannot list other users requests');
+    }
+    return REQUESTS.filter(r => r.owner_user_id === owner).map(toSummary);
+  }
+
+  // Fallback: return empty
+  return [];
+}
+
+// New: get request detail by id with ownership/role checks
+function getRequestById(token, id) {
+  if (!token || !token.sub) {
+    throw new AuthError();
+  }
+  const rec = REQUESTS.find(r => r.id === id);
+  if (!rec) {
+    throw new NotFoundError('Pedido não encontrado');
+  }
+  const roles = Array.isArray(token.roles) ? token.roles : [];
+  const isAgent = roles.includes('support_agent');
+  if (rec.owner_user_id !== token.sub && !isAgent) {
+    throw new ForbiddenError('access denied to this request');
+  }
+  // Return detailed view including responses
+  return {
+    id: rec.id,
+    subject: rec.subject,
+    description: rec.description,
+    state: rec.state,
+    created_at: rec.created_at,
+    updated_at: rec.updated_at,
+    resolved_at: rec.resolved_at,
+    responses: Array.isArray(rec.responses) ? rec.responses.map(r => ({ author_id: r.author_id, message: r.message, created_at: r.created_at })) : []
+  };
+}
+
+export {
+  createRequest,
+  getRequests,
+  clearStore,
+  ValidationError,
+  AuthError,
+  ForbiddenError,
+  NotFoundError,
+  listRequests,
+  getRequestById
+};
